@@ -1,0 +1,4 @@
+*.zip
+*.json
+/e_rara_candidates/
+ids.txt
