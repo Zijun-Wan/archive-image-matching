@@ -395,14 +395,14 @@ def download_selected_candidates(candidates, output_dir, size="full", max_worker
                 'success': True,
                 'record_id': record_id,
                 'file_path': result,
-                'good_matches': candidate['good_matches']
+                # 'good_matches': candidate['good_matches']
             }
         else:
             return {
                 'success': False,
                 'record_id': record_id,
                 'error': result,
-                'good_matches': candidate['good_matches']
+                # 'good_matches': candidate['good_matches']
             }
     
     print(f"Downloading {len(candidates)} selected candidates at full resolution...")
@@ -425,18 +425,15 @@ def download_selected_candidates(candidates, output_dir, size="full", max_worker
     
     return download_results
 
-def batch_download_with_target_filtering(record_ids, output_dir, 
+def batch_download_with_target_filtering(record_ids, output_dir,
                                          expand_to_pages=True, max_workers=5, size=",300",
                                          timeout=30, retries=3):
     """
     Complete pipeline: filter images based on matcher inliers and download ONLY candidates
-    
     Parameters:
     -----------
     record_ids : list
         List of e-rara record IDs
-    target_image_path : str
-        Path to the target image file
     output_dir : str
         Directory to save the images
     min_matches : int, optional
@@ -472,7 +469,9 @@ def batch_download_with_target_filtering(record_ids, output_dir,
     else:
         ids_to_process = record_ids
         print(f"Processing {len(ids_to_process)} record IDs directly")
-    
+
+    ids_to_process = [{'record_id': rid} for rid in ids_to_process]
+
     downloaded_images = download_selected_candidates(ids_to_process, output_dir, size, max_workers, timeout, retries)
         
     return downloaded_images
@@ -521,54 +520,6 @@ def main():
     print(f"\nDownload complete:"
           f"\n  Successful downloads: {results['successful']}"
           f"\n  Failed downloads: {results['failed']}")
-    # print(f"Loaded {len(record_ids)} record IDs")
-    # all_page_ids_dict = get_all_page_ids_from_records(record_ids, args.max_workers, args.timeout, args.retries)
-    # total_pages = sum(len(pages) for pages in all_page_ids_dict.values())
-    # print(f"Expanded to {total_pages} total page IDs")
-
-    # os.makedirs(args.output_dir, exist_ok=True)
-
-    # for rec_id, page_ids in all_page_ids_dict.items():
-    #     for page_id in tqdm(page_ids, desc=f"Downloading {rec_id}", unit="page"):
-    #         success, result = download_full_image(
-    #             page_id,
-    #             args.output_dir,
-    #             size="!600,600",
-    #             timeout=args.timeout,
-    #             retries=args.retries
-    #         )
-    #         if not success:
-    #             print(f"Failed to download {page_id} from {rec_id}: {result}")
-
-    # results = ()
-
-    # if 'error' in results:
-    #     print(f"Error: {results['error']}")
-    #     return
-    
-    # print(f"\nDownload and matching complete!")
-    # print(f"Input images: {results['summary']['input_images']}")
-    # print(f"Candidates found: {results['summary']['candidates_found']}")
-    # print(f"Successfully downloaded: {results['summary']['successfully_downloaded']}")
-    # print(f"Min matches threshold: {results['summary']['min_matches']}")
-    
-    # if 'data_efficiency' in results['summary']:
-    #     efficiency = results['summary']['data_efficiency']
-    #     print(f"\nData Efficiency:")
-    #     print(f"Thumbnail data processed: {efficiency['thumbnail_data_downloaded_mb']:.1f} MB")
-    #     print(f"Reduction ratio: {efficiency['reduction_ratio']:.1%}")
-    
-    # if results['download']['failed'] > 0:
-    #     print(f"\nFailed downloads: {results['download']['failed']}")
-    #     for error in results['download']['errors'][:5]:
-    #         print(f"- {error}")
-    
-    # if results['summary']['successfully_downloaded'] > 0:
-    #     print(f"\nBest matches (by number of inliers):")
-    #     for i, file_info in enumerate(results['download']['downloaded_files'][:5]):
-    #         print(f"{i+1}. {file_info['record_id']} ({file_info['good_matches']} matches)")
-    
-    # print(f"\nDetailed results saved to: {os.path.join(args.output_dir, 'filtering_results.json')}")
 
 if __name__ == "__main__":
     main()
