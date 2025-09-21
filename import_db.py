@@ -3,19 +3,12 @@
 # Usage on server:
 #   db = load_vt_model("vocab_db")
 
-import os, io, gzip, pickle
-import numpy as np
-import cv2
+import os, gzip, pickle
 import numpy as np
 import cv2
 from collections import defaultdict
 from dataclasses import dataclass, field
-import pickle
-import os
-from pathlib import Path
-from tqdm import tqdm
-import time
-import joblib
+import math
 # --- Optional FAISS for faster/more robust k-means ---
 try:
     import faiss  # pip install faiss-cpu  (or faiss-gpu)
@@ -35,10 +28,6 @@ class VocabNode:
     idf: float = 0.0   # computed after training
     # optional: entropy if you prefer that formulation
 
-import faiss
-import numpy as np
-
-# ---------- Hierarchical K-means (Vocabulary Tree) ----------
 class VocabTree:
     def __init__(self, k=10, L=6, min_cluster_size=30, max_iter=20, seed=0):
         self.k = int(k)
@@ -168,10 +157,6 @@ class VocabTree:
             leaf_nodes = self.quantize_descriptor_soft(d, **kwargs)
             lids.extend([lf.node_id for lf in leaf_nodes])
         return lids
-
-import numpy as np
-from collections import defaultdict
-import math
 
 class InvertedIndex:
     """
@@ -347,17 +332,29 @@ class InvertedIndex:
             return [(self.int2ext[doc_id], score) for doc_id, score in results]
         return results
 
-# ---------- Putting it together ----------
 class VocabTreeDB:
     def __init__(self, k=10, L=6, min_cluster_size=25, max_iter=40, seed=0):
         self.tree = VocabTree(k=k, L=L, min_cluster_size=min_cluster_size, max_iter=max_iter, seed=seed)
         self.index = None
         self.image_meta = {}  # optional: {external_id: {...}}
 
-    def spatial_verify(self, qdesc, qkps, candidates, ratio_thresh=0.75, cap=500, lam=0.001):
+    def _keypoints_to_tuples(self, kps):
+        return [(kp.pt[0], kp.pt[1], kp.size, kp.angle, kp.response, kp.octave, kp.class_id)
+                for kp in kps]
+
+    def _xy_from_keypointOrTuple(self, k):
+        if hasattr(k, "pt"):            # cv2.KeyPoint
+            return k.pt
+        if isinstance(k, (tuple, list)) and len(k) >= 2:
+            return float(k[0]), float(k[1])
+        if isinstance(k, np.ndarray) and k.size >= 2:
+            return float(k[0]), float(k[1])
+        raise TypeError(f"Unsupported keypoint type: {type(k)}")
+    
+    def spatial_verify(self, qdesc, qkps, candidates, ratio_thresh=0.75, cap=500, lam=0.1, outlier_tolerance=3.0):
         # quick exits
         if qdesc is None or len(qdesc) == 0 or not qkps:
-            return [(img_id, score, 0) for img_id, score in candidates]
+            return [(img_id, score, 0, 0) for img_id, score in candidates]
 
         qdesc = qdesc.astype(np.float32, copy=False)
         bf = cv2.BFMatcher(cv2.NORM_L2)
@@ -366,12 +363,12 @@ class VocabTreeDB:
         for img_id, base_score in candidates:
             meta = self.image_meta.get(img_id, None)
             if not meta:
-                reranked.append((img_id, base_score, 0)); continue
+                reranked.append((img_id, base_score, 0, 0)); continue
 
             desc = meta.get('descs', None)
             kps  = meta.get('kps', None)
             if desc is None or len(desc) == 0 or not kps:
-                reranked.append((img_id, base_score, 0)); continue
+                reranked.append((img_id, base_score, 0, 0)); continue
 
             desc = desc.astype(np.float32, copy=False)
 
@@ -386,23 +383,23 @@ class VocabTreeDB:
                     good.append(m)
 
             if len(good) < 4:
-                reranked.append((img_id, base_score, 0)); continue
+                reranked.append((img_id, base_score, 0, 0)); continue
 
             # build correspondence arrays
-            src = np.float32([qkps[m.queryIdx].pt for m in good])
-            dst = np.float32([kps[m.trainIdx].pt for m in good])
+            src = np.float32([self._xy_from_keypointOrTuple(qkps[m.queryIdx]) for m in good])
+            dst = np.float32([self._xy_from_keypointOrTuple(kps[m.trainIdx]) for m in good])
 
-            H, mask = cv2.findHomography(src, dst, cv2.USAC_MAGSAC, 3.0)
+            method = getattr(cv2, "USAC_MAGSAC", cv2.RANSAC)
+            H, mask = cv2.findHomography(src, dst, method, outlier_tolerance)
 
             inliers = int(mask.ravel().sum()) if mask is not None else 0
+            inlier_ratio = inliers / len(good) if good else 0
 
             final = float(base_score) + lam * min(inliers, cap)
-            reranked.append((img_id, final, inliers))
+            reranked.append((img_id, final, inliers, inlier_ratio))
 
         reranked.sort(key=lambda x: x[1], reverse=True)
         return reranked
-
-
 
     def train(self, image_descs):
         """
@@ -431,8 +428,7 @@ class VocabTreeDB:
 
         self.index.add_image(external_image_id, leaf_ids)
         
-        self.image_meta[external_image_id] = dict(path=path, kps=keypoints_to_tuples(kps), descs=descs)
-
+        self.image_meta[external_image_id] = dict(path=path, kps=self._keypoints_to_tuples(kps), descs=descs)
 
     def finalize(self, use_entropy=False, stop_percent=0.0, stop_frac=None, hard_purge=False):
         """
@@ -461,69 +457,18 @@ class VocabTreeDB:
         return self.index.score(qvec, topk=topk)
 
 
-# ---------- PATCH 1: make spatial verification tolerant to tuple keypoints ----------
-# Drop this in once (client or server). It monkey-patches db.spatial_verify to
-# accept either cv2.KeyPoint OR tuple/list keypoints (e.g., (x,y,...) saved in meta).
+        raw_leaf_ids = self.tree.quantize_descriptors_soft(
+            q_descs,
+            ratio=1.15,
+            max_branch=2,
+            max_soft_levels=2
+        )
+        leaf_ids = [self.tree.leaf_id_map[lid] for lid in raw_leaf_ids]
 
-import numpy as np
-import cv2
-
-def patch_spatial_verify_for_tuples(db):
-    def _kp_xy(k):
-        if hasattr(k, "pt"):            # cv2.KeyPoint
-            return k.pt
-        if isinstance(k, (tuple, list)) and len(k) >= 2:
-            return float(k[0]), float(k[1])
-        if isinstance(k, np.ndarray) and k.size >= 2:
-            return float(k[0]), float(k[1])
-        raise TypeError(f"Unsupported keypoint type: {type(k)}")
-
-    def _sv(qdesc, qkps, candidates, ratio_thresh=0.75, cap=1000, lam=0.01):
-        if qdesc is None or len(qdesc) == 0 or not qkps:
-            return [(img_id, score, 0) for img_id, score in candidates]
-
-        qdesc = qdesc.astype(np.float32, copy=False)
-        bf = cv2.BFMatcher(cv2.NORM_L2)
-
-        reranked = []
-        for img_id, base_score in candidates:
-            m = db.image_meta.get(img_id, {})
-            desc = m.get("descs", None)
-            kps  = m.get("kps", None)
-            if desc is None or len(desc) == 0 or not kps:
-                reranked.append((img_id, base_score, 0)); continue
-            desc = desc.astype(np.float32, copy=False)
-
-            matches = bf.knnMatch(qdesc, desc, k=2)
-            good = []
-            for pair in matches[:cap]:
-                if len(pair) < 2: continue
-                m1, m2 = pair
-                if m2 is not None and m1.distance < ratio_thresh * m2.distance:
-                    good.append(m1)
-
-            if len(good) < 4:
-                reranked.append((img_id, base_score, 0)); continue
-
-            src = np.float32([_kp_xy(qkps[m1.queryIdx]) for m1 in good])
-            dst = np.float32([_kp_xy(kps [m1.trainIdx]) for m1 in good])
-
-            method = getattr(cv2, "USAC_MAGSAC", cv2.RANSAC)
-            H, mask = cv2.findHomography(src, dst, method, 3.0)
-            inliers = int(mask.ravel().sum()) if mask is not None else 0
-
-            final = float(base_score) + lam * min(inliers, cap)
-            reranked.append((img_id, final, inliers))
-
-        reranked.sort(key=lambda x: x[1], reverse=True)
-        return reranked
-
-    db.spatial_verify = _sv
-    return db
+        qvec = self.index.query_vector(leaf_ids)
+        return self.index.score(qvec, topk=topk)
 
 # Usage (after you have a db object, either trained or loaded):
-
-
 
 def load_vt_model(in_dir):
     def _bytes_load_gz(path):
@@ -611,9 +556,6 @@ def load_vt_model(in_dir):
                 descs = np.ascontiguousarray(descs, dtype=np.float32)
             im[img_id] = {"path": m.get("path"), "kps": kps, "descs": descs}
         db.image_meta = im
-
-    # ensure spatial verify tolerates tuples (even if conversion happened)
-    patch_spatial_verify_for_tuples(db)
 
     print(f"[load_vt_model] Loaded from: {in_dir} | docs: {db.index.N} | leaves: {db.index.num_leaves}")
     return db

@@ -1,5 +1,8 @@
 *.zip
 *.json
 /e_rara_candidates/
-/try/
-ids.txt
+/e_rara_candidates(1)/
+/train/
+/train_without_filtering/
+/stamps/
+/vocab_db_without_filtering/
