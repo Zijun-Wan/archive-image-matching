@@ -47,7 +47,7 @@ class VocabTree:
         if N < k:
             k = max(1, N)
         seed = int(self.rng.randint(0, 2**31 - 1))
-        clus = faiss.Kmeans(d=D, k=k, niter=50, nredo=3, verbose=True, seed=seed)
+        clus = faiss.Kmeans(d=D, k=k, niter=self.max_iter, nredo=3, verbose=True, seed=seed)
         try:
             if hasattr(faiss, "get_num_gpus") and faiss.get_num_gpus() > 0 and hasattr(clus, "gpu"):
                 clus.gpu = True
@@ -65,7 +65,7 @@ class VocabTree:
         self._next_id += 1
         
          # FAISS-aware early stop
-        required = max(self.min_cluster_size, 39 * self.k)
+        required = max(self.min_cluster_size, 8 * self.k)
         if level == self.L or len(X) < required:
             node.is_leaf = True
             self.leaf_nodes.append(node)
@@ -333,7 +333,7 @@ class InvertedIndex:
         return results
 
 class VocabTreeDB:
-    def __init__(self, k=10, L=6, min_cluster_size=25, max_iter=40, seed=0):
+    def __init__(self, k=10, L=6, min_cluster_size=30, max_iter=20, seed=0):
         self.tree = VocabTree(k=k, L=L, min_cluster_size=min_cluster_size, max_iter=max_iter, seed=seed)
         self.index = None
         self.image_meta = {}  # optional: {external_id: {...}}
