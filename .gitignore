@@ -1,8 +1,6 @@
 *.zip
 *.json
-/e_rara_candidates/
-/e_rara_candidates(1)/
-/train/
-/train_without_filtering/
-/stamps/
-/vocab_db_without_filtering/
+/__pycache__/
+/image/
+/vocab_db*/
+/benchmark*/
