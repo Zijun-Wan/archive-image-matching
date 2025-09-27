@@ -1,6 +1,7 @@
 *.zip
-*.json
-!ground_truth.json
+
+try*
+
 /__pycache__/
 /image/
 /vocab_db*/

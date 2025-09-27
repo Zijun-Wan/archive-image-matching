@@ -1,11 +1,16 @@
 import requests
 import re
 import time
+from tqdm import tqdm
 from bs4 import BeautifulSoup
 from urllib.parse import urlencode
 
 # e-rara SRU endpoint and IIIF image base
 SRU_URL = "https://www.e-rara.ch/search"
+ENABLE_LOGGING = False
+def log_print(*args, **kwargs):
+    if ENABLE_LOGGING:
+        print(*args, **kwargs)
 
 def build_cql_query(author=None, from_date=None, until_date=None, place=None, title=None, publisher=None):
     """
@@ -67,12 +72,14 @@ def _parse_xml_response(content, start_record, max_records_page):
 
     total_elem = soup.find('numberOfRecords')
     total = int(total_elem.text) if total_elem else 0
-    print(f"Found total records: {total}")
+    
+    log_print(f"Found total records: {total}")
     
     ids = []
     
     records = soup.find_all('record')
-    print(f"Found {len(records)} record elements")
+    
+    log_print(f"Found {len(records)} record elements")
     
     # Method 1: Look for recordIdentifier tags directly
     record_identifiers = soup.find_all('recordIdentifier')
@@ -81,7 +88,8 @@ def _parse_xml_response(content, start_record, max_records_page):
             ids.append(rec_id.text.split(':')[-1])
     
     if ids:
-        print(f"Found {len(ids)} IDs using recordIdentifier tags")
+        
+        log_print(f"Found {len(ids)} IDs using recordIdentifier tags")
         next_start = (start_record + max_records_page) if (start_record + max_records_page) <= total else None
         return ids, next_start, total
     
@@ -118,13 +126,14 @@ def _parse_xml_response(content, start_record, max_records_page):
     
     # Method 3: As a last resort, look for any numeric IDs in the response
     if not ids:
-        print("No IDs found using standard methods, searching for numeric patterns in the XML...")
+        
+        log_print("No IDs found using standard methods, searching for numeric patterns in the XML...")
         for tag in soup.find_all():
             if tag.text and re.match(r'^\d{7,9}$', tag.text.strip()):
                 if tag.text.strip() not in ids:
                     ids.append(tag.text.strip())
     
-    print(f"Extracted {len(ids)} record IDs using all methods")
+    log_print(f"Extracted {len(ids)} record IDs using all methods")
     
     next_start = (start_record + max_records_page) if (start_record + max_records_page) <= total else None
     
@@ -185,7 +194,7 @@ def _parse_html_response(html_content, start_record, max_records_page=100):
                         if identifier not in ids:
                             ids.append(identifier)
     
-    print(f"Extracted {len(ids)} record IDs from HTML response")
+    log_print(f"Extracted {len(ids)} record IDs from HTML response")
     
     next_start = start_record + max_records_page if total and (start_record + max_records_page) <= total else None
 
@@ -229,26 +238,28 @@ def sru_search(cql_query, start_record=1, max_records_page=100, truncation="on")
     }
 
     url = SRU_URL + '?' + urlencode(params)
-    print(f"Request URL: {url}")
+    
+    log_print(f"Request URL: {url}")
 
     resp = requests.get(SRU_URL, params=params)
     resp.raise_for_status()
     
-    print(f"Response status: {resp.status_code}")
-    print(f"Response content type: {resp.headers.get('content-type', 'Unknown')}")
+    
+    log_print(f"Response status: {resp.status_code}")
+    log_print(f"Response content type: {resp.headers.get('content-type', 'Unknown')}")
     
     content = resp.content.lstrip()
     if content.startswith(b'<!DOCTYPE html>') or b'<html' in content.lower():
-        print("Response contains HTML, using HTML parser")
+        log_print("Response contains HTML, using HTML parser")
         return _parse_html_response(resp.text, start_record, max_records_page)
     else:
-        print("Response appears to be XML, using XML parser")
+        log_print("Response appears to be XML, using XML parser")
     
     try:
         return _parse_xml_response(resp.content, start_record, max_records_page)
     except Exception as e:
-        print(f"XML parsing failed: {e}")
-        print("Falling back to HTML parsing...")
+        log_print(f"XML parsing failed: {e}")
+        log_print("Falling back to HTML parsing...")
         return _parse_html_response(resp.text, start_record, max_records_page)
     
 
@@ -278,28 +289,28 @@ def search_ids(cql_query, start_record=1, max_records=None, max_records_page=100
     total = 0
     next_start = start_record
     while next_start:
-        print(f"Fetching records {next_start}-{next_start+max_records_page-1}...")
+        log_print(f"Fetching records {next_start}-{next_start+max_records_page-1}...")
         ids, next_start, total = sru_search(cql_query, next_start, max_records_page, truncation=truncation)
         
         if not ids:
-            print("No more records found, stopping pagination")
+            log_print("No more records found, stopping pagination")
             break
             
         all_ids.extend(ids)
-        print(f"Total IDs collected so far: {len(all_ids)}")
+        log_print(f"Total IDs collected so far: {len(all_ids)}")
         
         all_ids = list(set(all_ids))
         if max_records and len(all_ids) >= max_records:
-            print(f"Reached {max_records} limit of {max_records}. Stopping search.")
+            log_print(f"Reached {max_records} limit of {max_records}. Stopping search.")
             break
         
-        time.sleep(1)
+        time.sleep(0.1)
 
     if max_records and len(all_ids) > max_records:
-        all_ids = all_ids[:max_records]
-        print(f"Returning first {max_records} records out of {len(all_ids)} collected.")
+        all_ids = all_ids[:max_records]  
+        log_print(f"Returning first {max_records} records out of {len(all_ids)} collected.")
     
-    print(f"Final collection: {len(all_ids)} IDs out of {total} total records")
+    log_print(f"Final collection: {len(all_ids)} IDs out of {total} total records")
     return all_ids, total
 
 
@@ -424,13 +435,14 @@ def search_ids_v2(place=None, title=None, author=None, publisher=None,
     """
 
     if from_date and until_date and int(until_date) - int(from_date) > 399:
-        print(f"WARNING: The year gap between from_date ({from_date}) and until_date ({until_date}) is more than 400 years. Splitting search into multiple requests.")
+        log_print(f"WARNING: The year gap between from_date ({from_date}) and until_date ({until_date}) is more than 400 years. Splitting search into multiple requests.")
         all_ids = []
+        all_total = 0
         for year in range(int(from_date), int(until_date) + 1, 400):
             next_from_date = str(year)
             next_until_date = str(min(year + 399, int(until_date)))
-            print(f"Searching from {next_from_date} to {next_until_date}...")
-            ids = search_ids_v2(
+            log_print(f"Searching from {next_from_date} to {next_until_date}...")
+            ids, total = search_ids_v2(
                 place=place,
                 title=title,
                 author=author,
@@ -444,30 +456,31 @@ def search_ids_v2(place=None, title=None, author=None, publisher=None,
                 use_website_style=use_website_style
             )
             all_ids.extend(ids)
+            all_total += total
 
         all_ids = list(set(all_ids))
-        print(f"Total unique records found across all requests: {len(all_ids)}")
-        return all_ids
+        log_print(f"Total unique records found across all requests: {len(all_ids)}")
+        return all_ids, all_total
 
 
     if use_website_style:
         
-        if place: print(f"- Place: {place}")
-        if title: print(f"- Title: {title}")
-        if author: print(f"- Author: {author}")
-        if publisher: print(f"- Publisher: {publisher}")
-        if from_date: print(f"- From date: {from_date}")
-        if until_date: print(f"- Until date: {until_date}")
-        if start_record!=1: print(f"- Start record: {start_record}")
-        if max_records: print(f"- Max records: {max_records}")
-        if truncation: print(f"- Truncation: {truncation}")
+        if place: log_print(f"- Place: {place}")
+        if title: log_print(f"- Title: {title}")
+        if author: log_print(f"- Author: {author}")
+        if publisher: log_print(f"- Publisher: {publisher}")
+        if from_date: log_print(f"- From date: {from_date}")
+        if until_date: log_print(f"- Until date: {until_date}")
+        if start_record!=1: log_print(f"- Start record: {start_record}")
+        if max_records: log_print(f"- Max records: {max_records}")
+        if truncation: log_print(f"- Truncation: {truncation}")
         if not max_records:
-            print("WARNING: No max_records specified. Fatching all foud ids.")
+            log_print("WARNING: No max_records specified. Fatching all foud ids.")
         if not start_record:
             start_record = 1
         
         if max_record_page not in [10, 20, 30, 50, 100]:
-            print(f"WARNING: max_record_page should be one of [10, 20, 30, 50, 100]. Using default value of 100.")
+            log_print(f"WARNING: max_record_page should be one of [10, 20, 30, 50, 100]. Using default value of 100.")
             max_record_page = 100
         
         _, params = build_cql_query_v2(
@@ -485,10 +498,10 @@ def search_ids_v2(place=None, title=None, author=None, publisher=None,
         params['maximumRecords'] = max_record_page
         next_start = start_record
         while next_start:
-            print(f"Fetching records starting from {next_start}...")
+            log_print(f"Fetching records starting from {next_start}...")
             params['startRecord'] = next_start
             url = SRU_URL + '?' + urlencode(params)
-            print(f"Request URL: {url}")
+            log_print(f"Request URL: {url}")
             resp = requests.get(SRU_URL, params=params)
             resp.raise_for_status()
         
@@ -496,16 +509,16 @@ def search_ids_v2(place=None, title=None, author=None, publisher=None,
             all_ids.extend(ids)
             all_ids = list(set(all_ids))
             
-            time.sleep(1)
+            time.sleep(0.1)
 
             if max_records and len(all_ids) >= max_records:
-                print(f"Reached max_records limit of {max_records}. Stopping search.")
+                log_print(f"Reached max_records limit of {max_records}. Stopping search.")
                 break
         
-        print(f"Found {total} total records, {len(all_ids)} unique records.")
+        log_print(f"Found {total} total records, {len(all_ids)} unique records.")
         if max_records and len(all_ids) > max_records:
             all_ids = all_ids[:max_records]
-            print(f"Returning first {max_records} records.")
+            log_print(f"Returning first {max_records} records.")
         return all_ids, total
 
     else:
@@ -519,43 +532,55 @@ def search_ids_v2(place=None, title=None, author=None, publisher=None,
         )
         
         if not cql_query:
-            print("WARNING: No filters specified. Please set at least one filter.")
+            log_print("WARNING: No filters specified. Please set at least one filter.")
             return []
         
-        print(f"CQL query: {cql_query}")
+        log_print(f"CQL query: {cql_query}")
         
         record_ids, total = search_ids(cql_query,
                                        start_record=start_record,
                                        max_records=max_records,
                                        truncation=truncation)
-        print(f"Found {total} total records, fetched {len(record_ids)}")
+        log_print(f"Found {total} total records, fetched {len(record_ids)}")
         return record_ids, total
 
 
 if __name__ == "__main__":
 
-    # Example usage: change these as needed
+    # return 1 book every 2 years from 1450 to 1950, around 250 books in total
+
     filters = dict(
-        # author=None,            # e.g. "Goethe"
-        from_date="1600",         # e.g. "1800"
-        until_date="1620",        # e.g. "1850"
-        place="Bern",           # e.g. "Bern"
-        # title="Radio",             # e.g. "Faust"
-        # publisher=None,         # e.g. "Schiller"
-        # max_records=923,          # e.g. 5
+        start_record=1,          # e.g. 1
+        max_records=1,          # e.g. 5
+        max_record_page=10,     # e.g. 100
         use_website_style=True,  # e.g. True
         truncation="on"         # e.g. "on"/"off"
     )
 
-    print("Testing enhanced search with Place='Bern' and max_records=5:")
-    results_bern, total = search_ids_v2(**filters)
-    # print(f"Results for 'Bern': {results_bern}")
+    for start_year in tqdm(range(1450, 1951, 2)):
+        end_year = start_year + 1
+        filters['from_date'] = str(start_year)
+        filters['until_date'] = str(end_year)
+        ids, total = search_ids_v2(**filters)
 
-    with open('ids.txt', 'w') as f:
-        for record_id in results_bern:
-            f.write(f"{record_id}\n")
+        with open('ids.txt', 'a') as f:
+            for record_id in ids:
+                f.write(f"{record_id}\n")
 
-    # Also test with CQL approach for comparison
+        time.sleep(0.1)
+
+    # Example usage: change these as needed
+
+
+    # print("Testing enhanced search with Place='Bern' and max_records=5:")
+    # results, total = search_ids_v2(**filters)
+    # print(f"\nResult: {results}")
+
+    # with open('ids.txt', 'w') as f:
+    #     for record_id in results:
+    #         f.write(f"{record_id}\n")
+
+    # # Also test with CQL approach for comparison
     # filters['use_website_style'] = False
     # print("\nTesting CQL search with Place='Bern' and max_records=5:")
     # results_cql_bern = search_ids_v2(**filters)

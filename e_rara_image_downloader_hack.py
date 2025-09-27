@@ -465,7 +465,20 @@ def batch_download_with_target_filtering(record_ids, output_dir,
         print("Expanding record IDs to individual page IDs...")
         all_page_ids_dict = get_all_page_ids_from_records(record_ids, max_workers, timeout, retries)
         ids_to_process = [page_id for page_ids in all_page_ids_dict.values() for page_id in page_ids]
-        print(f"Expanded {len(record_ids)} records to {ids_to_process} pages")
+        print(f"Expanded {len(record_ids)} records to {len(ids_to_process)} pages")
+        image_dir = r"D:/e_rara_images"
+
+        # Collect the set of filenames you already have (without extension)
+        existing_ids = {
+            os.path.splitext(filename)[0]
+            for filename in os.listdir(image_dir)
+            if filename.lower().endswith(".jpg")
+        }
+
+        # Filter out IDs that already exist
+        ids_to_process = [page_id for page_id in ids_to_process if page_id not in existing_ids]
+        print(f"Remaining IDs to process: {len(ids_to_process)}")
+        
     else:
         ids_to_process = record_ids
         print(f"Processing {len(ids_to_process)} record IDs directly")
