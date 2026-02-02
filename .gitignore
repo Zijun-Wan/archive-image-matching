@@ -1,5 +1,8 @@
 *.zip
-*.json
-/e_rara_candidates/
-/try/
-ids.txt
+
+try*
+
+/__pycache__/
+/image/
+/vocab_db*/
+/benchmark*/

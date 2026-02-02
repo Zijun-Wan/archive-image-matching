@@ -86,3 +86,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # example usage:
+    # python find_book_from_page.py -f book_to_pages.json --id 4699513
+
